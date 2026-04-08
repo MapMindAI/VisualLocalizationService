@@ -1,0 +1,10 @@
+{
+  "marker_image": "/Mobili/python/visual_pose_service/marker_pose_service/marker_image/dm_final.jpg",
+  "marker_width": 0.3,
+  "min_matches": 15,
+  "min_inliers": 8,
+  "min_inlier_ratio": 0.3,
+  "max_avg_reproj_error": 15.0,
+  "max_reproj_error": 20.0,
+  "enable_vio_retry": false
+}
