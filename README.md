@@ -4,13 +4,6 @@ gRPC service for visual localization: the server estimates camera pose using a p
 
 ---
 
-## What changed in the repo (behavior vs docs)
-
-- **Documentation and comments** were translated to English; **localization logic, gRPC handlers, and request/response shapes were not intentionally changed**.
-- **`deployment/entrypoint.sh`** now passes **`--port`** and **`--sp_address`** into `server.pyc` via environment variables (`PORT`, `SP_ADDRESS`). Previously the container relied on baked-in defaults for Triton, which made many deployments non-obvious. This is a **small functional fix** for Docker runs.
-
----
-
 ## What you need before running
 
 1. **Map directory** (`--model_path`): must contain the localization database and assets (at minimum `database_3d.db` and related data expected by `visual_localizer.py` — see `visual_pose_service/README.md` for map preparation).
