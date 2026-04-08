@@ -311,7 +311,3 @@ Build steps typically compile `visual_pose_server.py` → `server.pyc`, `marker_
 2. Import errors — verify image build; `marker_pose_server.pyc` under `/app/marker_pose_service/`  
 3. Config missing — file under `DataDir`; check `MARKER_CONFIG_NAME`  
 4. Port in use — change `PORT` or free the port  
-
-## License
-
-Copyright 2025 DeepMirror Inc. All rights reserved.
