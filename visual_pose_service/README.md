@@ -1,22 +1,27 @@
 # Visual Pose Service
 
-Demo and deployment assets for the visual pose gRPC service.
+Visual pose gRPC service and tooling.
 
-## Quick start
-
-### Dependencies
+## Quick start (Conda)
 
 ```bash
+conda create -n vlpose python=3.9 -y
+conda activate vlpose
+cd visual_pose_service
 pip install -r requirements.txt
+export PYTHONPATH="$(pwd)"
 ```
 
-### Start server
+Start the server (adjust paths and Triton address):
 
 ```bash
-python visual_pose_server.py
+python visual_pose_server.py \
+  --model_path /path/to/map \
+  --sp_address YOUR_TRITON_HOST:8001 \
+  --port 40010
 ```
 
-### Run test client
+Test client (after editing addresses/paths in the script):
 
 ```bash
 python visual_pose_client.py
@@ -68,48 +73,24 @@ Parameters are mostly hard-coded in the file for local simulation.
 
 When you run `python visual_pose_client.py`, choose `1` for single-client loop or `2` for multi-client stress test.
 
-- **Single client**: `server_address`, `image_path`, `interval`, `max_num` (in code).
-- **Multi client**: number of clients, then `server_address`, `image_path`, `interval`, `run_time` (in code).
-
 ## Typical workflow
 
 ```text
-# After map generation: ensure database and images exist under the map directory
+conda activate vlpose
+cd visual_pose_service
+export PYTHONPATH="$(pwd)"
 
-cd visual_pose_service   # adjust paths as needed
+# Terminal 1
+python visual_pose_server.py --model_path ... --sp_address ...
 
-python visual_pose_server.py   # with args above
-
-python visual_pose_client.py   # in another terminal
+# Terminal 2
+python visual_pose_client.py
 ```
 
-## Deploying on Linux / Windows
+## Networking
 
-- Allow inbound connections through the firewall for the gRPC port.
-- Docker images can speed up deployment (images may be built in CI and stored in a registry).
+Open the host firewall for the chosen gRPC port if clients connect remotely.
 
-Example build (paths adjusted to your environment):
-
-```bash
-chmod +x build_server.sh
-./path/to/build_server.sh
-```
-
-Before running, ensure:
-
-- Docker is installed.
-- Map data exists locally (`DATA_DIR` in your run script).
-- `run_server_linux.sh` or `run_server_windows.ps1` paths are updated:
-  - `DATA_DIR`: map directory to mount into the container
-  - `DB_NAME`: database file path relative to `DATA_DIR`
-  - `IMAGE_PATH`: container image reference
-  - `MODEL_DIR`: Triton model repository (if applicable)
-  - Optional: override `deployment/entrypoint.sh` via a bind mount for debugging
-- `install_docker_*.sh` / `install_docker_*.ps1` alongside the run scripts if you use them.
-- Authenticate to your container registry (`docker login ...`) before pulling private images.
-
-Then run your `run_server_*.sh` or `run_server_*.ps1`.
-
-Deployed layout example:
+Example project layout (data paths vary):
 
 ![folder.jpg](./images/folder.jpg)

@@ -7,9 +7,12 @@ import signal
 import time
 import queue
 import multiprocessing as mp
+import os
 import sys
 
-sys.path.append('/Mobili/python')
+_service_root = os.path.dirname(os.path.abspath(__file__))
+if _service_root not in sys.path:
+    sys.path.insert(0, _service_root)
 from proto.map import visual_pose_service_pb2, visual_pose_service_pb2_grpc
 
 # Import common utilities

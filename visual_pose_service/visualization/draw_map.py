@@ -1,10 +1,7 @@
 import numpy as np
 import open3d as o3d
-import argparse
 import os
 import cv2
-import sqlite3
-import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation as R
 
 MESH = None
@@ -154,7 +151,7 @@ def project_mesh_to_image(image, rotation, position, mesh_path, intrinsic, save_
     extrinsic[:3, :3] = rotation
     extrinsic[:3, 3] = position.squeeze()
 
-    # Use OffscreenRenderer(in docker window size will not be the same as what you set)
+    # OffscreenRenderer: framebuffer size matches requested width/height
     render = o3d.visualization.rendering.OffscreenRenderer(width, height)
     render.scene.set_background([0, 0, 0, 0])  # Transparent background
 
@@ -285,24 +282,3 @@ def project_mesh_to_image_opencv(
     return background_image
 
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--database', help='database name', default="database_3d.db", type=str)
-    parser.add_argument('--images', help='images folder', default="images", type=str)
-    parser.add_argument(
-        '--model_path',
-        help='model path',
-        default="/mnt/ml-experiment-data/yeliu/gaussian_splatting/GoPro/NanshaOffice",
-        type=str,
-    )
-    args = parser.parse_args()
-    return args
-
-
-if __name__ == "__main__":
-    args = parse_args()
-    db_path = os.path.join(args.model_path, args.database)
-
-    map_drawer = MapDrawer(db_path)
-
-    print('Main function')

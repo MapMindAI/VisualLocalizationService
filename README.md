@@ -4,23 +4,63 @@ gRPC service for visual localization: the server estimates camera pose using a p
 
 ---
 
-## What you need before running
+## Prerequisites
 
 1. **Map directory** (`--model_path`): must contain the localization database and assets (at minimum `database_3d.db` and related data expected by `visual_localizer.py` — see `visual_pose_service/README.md` for map preparation).
 2. **Triton Inference Server** with the SuperPoint / SuperGlue models expected by this codebase (model names such as `superpoint_trt`; see `visual_pose_service/feature/superpoint.py`). The server connects to Triton at **`--sp_address`** (gRPC).
-3. **Python** (3.9+ recommended) and dependencies from `visual_pose_service/requirements.txt` if you run from source.
 
 ---
 
-## Deploy the server (host, from source)
+## Environment with Conda (recommended)
 
-This is the most straightforward path and matches the Python entrypoint.
+Create and activate an environment, then install Python dependencies:
 
 ```bash
+conda create -n vlpose python=3.9 -y
+conda activate vlpose
+cd visual_pose_service
+pip install -r requirements.txt
+```
+
+On **Linux**, if OpenCV or Open3D fail to load native libraries, install the usual graphics/runtime packages for your distro (for example `libgl1`, `libglib2.0-0`, `libgomp1` on Debian/Ubuntu).
+
+Always run commands from `visual_pose_service` **or** set:
+
+```bash
+export PYTHONPATH="/absolute/path/to/VisualLocalizationService/visual_pose_service"
+```
+
+---
+
+## Run the visual pose server
+
+### Option A: helper script (recommended)
+
+From `visual_pose_service` after `conda activate` and `pip install -r requirements.txt`:
+
+```bash
+chmod +x scripts/run_vlserver.sh   # once
+MODEL_PATH=/absolute/path/to/your/map \
+SP_ADDRESS=YOUR_TRITON_HOST:8001 \
+./scripts/run_vlserver.sh
+```
+
+Defaults: `PORT=40010`, `SP_ADDRESS=127.0.0.1:8001`, `POOL_SIZE=4`, `TOP_K=3`. See comment header in `scripts/run_vlserver.sh` for all environment variables.
+
+You can also pass arguments directly to the server (same as `visual_pose_server.py`):
+
+```bash
+./scripts/run_vlserver.sh --model_path /path/to/map --sp_address 127.0.0.1:8001 --port 40010
+```
+
+### Option B: run Python directly
+
+```bash
+conda activate vlpose
 cd visual_pose_service
 export PYTHONPATH="$(pwd)"
 
-python3 visual_pose_server.py \
+python visual_pose_server.py \
   --model_path /absolute/path/to/your/map \
   --port 40010 \
   --sp_address YOUR_TRITON_HOST:8001 \
@@ -28,76 +68,37 @@ python3 visual_pose_server.py \
   --top_k 3
 ```
 
-- **`--model_path`**: directory that contains `database_3d.db` (not the file path alone).
-- **`--sp_address`**: host and gRPC port where Triton serves the feature models (must be reachable from the machine running the server).
-- **`--port`**: gRPC port for **this** service (default `40010`).
+- **`--model_path`**: directory that contains `database_3d.db` (the directory, not the file path).
+- **`--sp_address`**: Triton gRPC `host:port` reachable from this machine.
+- **`--port`**: gRPC port for this service (default `40010`).
 
-The server listens on **`0.0.0.0:<port>`** (see `visual_pose_server.py`).
+The server listens on **`0.0.0.0:<port>`**.
 
 ---
 
-## Call the server from the test client
+## Call the server with the test client
 
-The bundled client is **not** a production SDK; it is **hard-coded** for image path and intrinsics. To get a **working** call against your server:
+The bundled client is **not** a production SDK; paths and intrinsics are **hard-coded**.
 
-1. **Match the address and port**  
-   In `visual_pose_service/visual_pose_client.py`, set **`SINGLE_CLIENT_ADDRESS`** and **`MULTI_CLIENTS_ADDRESS`** to `host:port` of the **visual pose server** (e.g. `127.0.0.1:40010` if local).
-
-2. **Point to a real image**  
-   Set **`self.folder`** (or **`self.image_path`**) to a JPEG/PNG that exists on disk (defaults under `/Mobili/...` will not work unless you create them).
-
-3. **Align intrinsics (optional but recommended)**  
-   `create_request()` uses fixed `fx, fy` and `cx, cy` from `cv2.imread(self.image_path).shape` — adjust for your camera if you care about accuracy.
-
-4. **Run the client** from `visual_pose_service` with the same `PYTHONPATH`:
+1. Set **`SINGLE_CLIENT_ADDRESS`** / **`MULTI_CLIENTS_ADDRESS`** in `visual_pose_service/visual_pose_client.py` to your server `host:port`.
+2. Set **`self.folder`** / **`self.image_path`** to a real image file.
+3. Run:
 
 ```bash
+conda activate vlpose
 cd visual_pose_service
 export PYTHONPATH="$(pwd)"
-python3 visual_pose_client.py
+python visual_pose_client.py
 ```
-
-Follow the prompts (interval, single vs multi-client). The client calls **`GetPoseFromImage`** over gRPC.
-
----
-
-## Deploy the server (Docker)
-
-Build (from `visual_pose_service`):
-
-```bash
-docker build -f deployment/dockerfile.dev -t visual-pose-service:dev .
-```
-
-Run (example: map data on host at `./mapdata`, DB file at `./mapdata/session/database_3d.db`):
-
-```bash
-docker run --rm \
-  --network host \
-  -e DB_NAME="session/database_3d.db" \
-  -e SP_ADDRESS="127.0.0.1:8001" \
-  -e PORT="40010" \
-  -v "$(pwd)/mapdata:/data" \
-  visual-pose-service:dev
-```
-
-- **`DB_NAME`**: path **inside** `/data` to the **database file** (e.g. `myrun/database_3d.db`). The entrypoint checks that **`/data/$DB_NAME`** exists.
-- **`SP_ADDRESS`**: Triton gRPC URL **as seen from inside the container** (use `host.docker.internal`, host LAN IP, or `--network host` with `127.0.0.1` if Triton is on the host).
-- **`PORT`**: gRPC port for **this** service (default `40010`).
-
-Optional file logging: set **`LOG_DIR`** to a writable path (e.g. mount a volume and pass `-e LOG_DIR=/logs`).
-
-Then call the server from the host test client using `127.0.0.1:40010` if you used `--network host`, or the published host port if you map ports instead.
 
 ---
 
 ## Production clients
 
-Use **gRPC** and the **`GetPoseFromImage`** RPC. **Protobuf stubs** live under `visual_pose_service/proto/` (Python). Original `.proto` files are not in this repo; generate stubs for other languages from your team’s `.proto` sources.
+Use **gRPC** and **`GetPoseFromImage`**. Python stubs live under `visual_pose_service/proto/`. Original `.proto` files are not in this repository.
 
 ---
 
-## Other modules
+## Related tools (not part of the localization server)
 
-- Map alignment (QR codes): [`visual_pose_service/map_alignment/README.md`](visual_pose_service/map_alignment/README.md)
-- Marker pose (separate gRPC service, different port): `visual_pose_service/marker_pose_service/`
+- **Marker pose** — separate gRPC service for fiducial/marker pose: [`visual_pose_service/marker_pose_service/README.md`](visual_pose_service/marker_pose_service/README.md)

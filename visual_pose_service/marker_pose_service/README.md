@@ -68,10 +68,13 @@ JSON config; see `config/marker_config_example.json`:
 ### 1. Start server
 
 ```bash
-python marker_pose_server.py \
-  --config /path/to/marker_config.json \
+cd visual_pose_service
+export PYTHONPATH="$(pwd)"
+
+python marker_pose_service/marker_pose_server.py \
+  --marker_config /path/to/marker_config.json \
   --port 40011 \
-  --log_dir /path/to/logs \
+  --logs_dir /path/to/logs \
   --pool_size 4
 ```
 
@@ -176,138 +179,24 @@ gRPC: image in, marker pose out.
 - Gravity parameters must match your world frame  
 - VIO retry needs `image_prior`; adds latency; default off  
 
-## Deployment (Docker, Linux / Windows)
+## Environment (Conda)
 
-Images may be prebuilt in CI; you often only need to pull and run.
-
-### Prerequisites
-
-1. **Docker** — use `install_docker_linux.sh` or `install_docker_windows.ps1` from your deployment bundle if provided.  
-2. **Registry** — `docker login` to your private registry before `docker pull`.
-
-### Deployment folder (`DataDir`)
-
-**Linux example**
-
-```
-DataDir/
-├── marker_image/
-│   └── dm_final.jpg
-├── marker_config.json          # optional
-├── run_marker_pose_server_linux.sh
-├── install_docker_linux.sh
-└── entrypoint_marker_pose.sh
-```
-
-**Windows example**
-
-```
-DataDir/
-├── marker_image/
-│   └── dm_final.jpg
-├── marker_config.json          # optional
-├── run_marker_pose_server_windows.ps1
-├── install_docker_windows.ps1
-└── entrypoint_marker_pose.sh
-```
-
-- **`marker_image/`**: template images  
-- **`marker_config.json`**: optional; defaults used if missing  
-- **Run scripts**: start the container  
-- **Install scripts**: optional Docker install helpers  
-- **`entrypoint_marker_pose.sh`**: container entry (can be bind-mounted for debugging)  
-
-### Example `marker_config.json` (container paths)
-
-```json
-{
-  "marker_image": "/data/marker_image/dm_final.jpg",
-  "marker_width": 0.3,
-  "min_matches": 15,
-  "min_inliers": 8,
-  "min_inlier_ratio": 0.3,
-  "max_avg_reproj_error": 15.0,
-  "max_reproj_error": 20.0,
-  "enable_vio_retry": false
-}
-```
-
-Use **`/data/...` paths** for `marker_image` because `DataDir` is mounted at `/data`.
-
-### Run script variables
-
-**Linux (`run_marker_pose_server_linux.sh`)**
-
-- `DATA_DIR` — host folder mounted to `/data`  
-- `MARKER_CONFIG_NAME` — optional config filename under `DATA_DIR`  
-- `PORT` — default `40011`  
-- `POOL_SIZE` — default `4`  
-- `LOG_DIR` — optional file log directory  
-
-**Windows (`run_marker_pose_server_windows.ps1`)**
-
-- `$DataDir`, `$MarkerConfigName`, `$Port`, `$PoolSize`, `$LogDir` — same roles  
-
-### Start
-
-**Linux**
+Use the same Conda env as the main `visual_pose_service` (see repository root `README.md`), or a minimal env with the dependencies above. From the repo root:
 
 ```bash
-cd /path/to/DataDir
-bash run_marker_pose_server_linux.sh
+conda create -n vlpose python=3.9 -y
+conda activate vlpose
+cd visual_pose_service
+pip install -r requirements.txt
 ```
 
-**Windows**
-
-```powershell
-cd C:\path\to\DataDir
-.\run_marker_pose_server_windows.ps1
-```
-
-Run these **from `DataDir`** so relative paths resolve.
-
-### Debug entrypoint
-
-Bind-mount a custom `entrypoint_marker_pose.sh` if you need extra flags:
-
-**Linux**
+Run the marker server from `visual_pose_service` so `proto` and shared modules resolve (or set `PYTHONPATH` to `visual_pose_service`):
 
 ```bash
--v "$DATA_DIR/entrypoint_marker_pose.sh":/app/deployment/entrypoint_marker_pose.sh
+conda activate vlpose
+cd /path/to/VisualLocalizationService/visual_pose_service
+export PYTHONPATH="$(pwd)"
+python marker_pose_service/marker_pose_server.py --port 40011 --pool_size 4
 ```
 
-**Windows**
-
-```powershell
--v "${DataDir}\entrypoint_marker_pose.sh:/app/deployment/entrypoint_marker_pose.sh"
-```
-
-If omitted, the image default entrypoint is used.
-
-### Build image (optional)
-
-```bash
-cd /path/to/visual_pose_service
-chmod +x scripts/build_server.sh
-./scripts/build_server.sh
-```
-
-Build steps typically compile `visual_pose_server.py` → `server.pyc`, `marker_pose_server.py` → `marker_pose_server.pyc` under `/app/marker_pose_service/`, and strip sources.
-
-### Container environment variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `MARKER_CONFIG_NAME` | Config filename under `/data` | none (defaults) |
-| `PORT` | Server port | `40011` |
-| `POOL_SIZE` | Estimator pool size | `4` |
-| `MAX_WORKERS` | Max worker threads | `10` |
-| `LOG_LEVEL` | Log level | `INFO` |
-| `LOG_DIR` | Log directory | unset (no file logs) |
-
-### Troubleshooting (Docker)
-
-1. Container exits — check Docker, host paths, marker files  
-2. Import errors — verify image build; `marker_pose_server.pyc` under `/app/marker_pose_service/`  
-3. Config missing — file under `DataDir`; check `MARKER_CONFIG_NAME`  
-4. Port in use — change `PORT` or free the port  
+Point `--marker_config` / JSON `marker_image` to **real paths on your machine** (not container paths).
