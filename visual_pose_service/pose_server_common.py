@@ -191,8 +191,23 @@ class SerializablePoseTask:
         self.error = None
 
 
+def _peer_to_client_host(context_peer: str) -> str:
+    """Extract host from gRPC context.peer() (e.g. ipv4:127.0.0.1:12345 -> 127.0.0.1)."""
+    if not context_peer:
+        return "unknown"
+    if context_peer.startswith("ipv4:"):
+        rest = context_peer[len("ipv4:") :]
+        host, _, _ = rest.rpartition(":")
+        return host if host else "unknown"
+    if context_peer.startswith("ipv6:"):
+        return "ipv6"
+    # Fallback: host:port without prefix
+    host, _, _ = context_peer.rpartition(":")
+    return host if host else context_peer
+
+
 def make_save_dir(context_peer, timestamp, task_id, log_dir):
-    client_ip = context_peer.split(':')[1] if context_peer.startswith("ipv4:") else "unknown"
+    client_ip = _peer_to_client_host(context_peer)
     save_dir = os.path.join(log_dir, client_ip, 'request-' + str(timestamp) + f'-task-{task_id}')
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -310,9 +325,9 @@ def process_task(worker_id, task, estimator, log_flag, log_dir):
             task.error = error_msg
             return
 
-        # Save request if needed
-        save_dir = make_save_dir(task.context_peer, task.request.image_timestamp, task.id, log_dir)
-        if log_flag:
+        # Per-request debug dirs and request dumps only when log_flag=1 (and log_dir is set for file logging)
+        if log_flag and log_dir:
+            save_dir = make_save_dir(task.context_peer, task.request.image_timestamp, task.id, log_dir)
             save_request(
                 task.request.image_timestamp,
                 task.image,
@@ -320,6 +335,8 @@ def process_task(worker_id, task, estimator, log_flag, log_dir):
                 task.image_prior,
                 save_dir,
             )
+        else:
+            save_dir = ""
 
         # Estimate pose
         start_time = time.time()

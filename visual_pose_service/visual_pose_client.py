@@ -12,11 +12,7 @@ from proto.internal.data import image_data_pb2
 from proto.api.vision import image_pb2
 from proto.api.vision import sensor_pb2
 
-# MULTI_CLIENTS_ADDRESS = '192.168.19.150:40010'
 MULTI_CLIENTS_ADDRESS = '127.0.0.1:40010'
-
-# SINGLE_CLIENT_ADDRESS = '192.168.11.194:40010'
-# SINGLE_CLIENT_ADDRESS = '192.168.19.150:40010'
 SINGLE_CLIENT_ADDRESS = '127.0.0.1:40010'
 
 TIMEOUT = 30.0 # seconds, gRPC timeout for each request
@@ -27,9 +23,8 @@ class VisualPoseClient:
         self.stub = visual_pose_service_pb2_grpc.VisualPoseServiceStub(self.channel)
         self.running = True
 
-        # TODO(wenhao): Use stream to send multiple images
-        self.folder = '/Mobili/Data/'
-        self.image_path = self.folder + 'of13.jpg'
+        self.folder = '../Data/test_map/'
+        self.image_path = self.folder + 'test2.jpg'
 
         # Setup signal handlers
         signal.signal(signal.SIGINT, self.signal_handler)

@@ -390,7 +390,7 @@ def main():
         '--model_path',
         type=str,
         # required=True,
-        default='/mnt/ml-experiment-data/yeliu/gaussian_splatting/GoPro/NanshaOffice_20250805/',
+        default='',
         help='Path to the COLMAP model directory',
     )
     parser.add_argument('--port', type=int, default=40010, help='Server port (default: 40010)')
@@ -407,7 +407,7 @@ def main():
     parser.add_argument(
         '--sp_address',
         type=str,
-        default='192.168.11.194:8001',
+        default='127.0.0.1:8001',
         help='Address for superpoint service',
     )
     parser.add_argument(
@@ -425,7 +425,7 @@ def main():
     parser.add_argument(
         '--logs_dir',
         type=str,
-        default='/Mobili/python/logs',
+        default='./logs',
         help='Logs directory',
     )
     parser.add_argument(
