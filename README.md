@@ -21,11 +21,23 @@ That repository provides an end-to-end Gaussian Splatting workflow (e.g. drone /
 
 Any extra steps to fill poses, 3D points from depth, and keypoints into the database are part of **your mapping pipeline** (or tooling shipped with EasyGaussianSplatting); this service repo does not re-run full map building.
 
+Example of reconstruction result:
+
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="asset/gs_img.png" alt="GS reconstruction example" width="400"/></td>
+    <td align="center" width="50%"><img src="asset/colmap.gif" alt="COLMAP animation" width="400"/></td>
+  </tr>
+</table>
+
+
 ---
 
 ## Bag-of-words (BoW) retrieval
 
-After the map directory exists and matches your pipeline output, prepare **retrieval** data used by `BowRetireval` in `visual_localizer.py`:
+**BoW retrieval files are produced by the [EasyGaussianSplatting](https://github.com/MapMindAI/EasyGaussianSplatting) map pipeline** alongside `database_3d.db` and the rest of the map layout. After a successful run, the map root you pass to this service as `--model_path` should already contain what `BowRetireval` in `visual_localizer.py` expects—no separate BoW step is required in the usual workflow.
+
+If you need to **regenerate** retrieval data (e.g. after manual edits to the database, or when debugging), you can run:
 
 ```bash
 conda activate vlpose
@@ -34,8 +46,6 @@ export PYTHONPATH="$(pwd)"
 
 python retrieval/make_retrieval_db.py --model_path /path/to/your/map
 ```
-
-BoW preparation may already be integrated into the EasyGaussianSplatting / internal build flow; if so, you only need to point `--model_path` at the same map root that contains the expected files.
 
 ---
 
@@ -138,6 +148,12 @@ python visual_pose_client.py
 Use **gRPC** and **`GetPoseFromImage`**. Python stubs live under `visual_pose_service/proto/`. Original `.proto` files are not in this repository.
 
 ---
+
+## Application Example
+
+Global visual localization service combined with local tracking of VR devices achieves global tracking.
+
+<img src="asset/office_test.gif" alt="office test result" width="400"/>
 
 ## Related tools (not part of the localization server)
 

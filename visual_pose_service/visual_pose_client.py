@@ -23,8 +23,8 @@ class VisualPoseClient:
         self.stub = visual_pose_service_pb2_grpc.VisualPoseServiceStub(self.channel)
         self.running = True
 
-        self.folder = '../Data/test_map/'
-        self.image_path = self.folder + 'test2.jpg'
+        self.folder = '../Data/NS_hks_260414/test_img/'
+        self.image_path = self.folder + '6.jpg'
 
         # Setup signal handlers
         signal.signal(signal.SIGINT, self.signal_handler)
