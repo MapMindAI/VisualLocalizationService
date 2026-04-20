@@ -13,7 +13,7 @@ if _parent_dir not in sys.path:
     sys.path.insert(0, _parent_dir)
 
 from optimization.pnp_optimization import pnp_ransac_optimization_with_gravity
-from utils.math_utils import rotation_matrix_to_quaternion
+from utils.math_utils import quaternion_to_rotation_matrix, rotation_matrix_to_quaternion
 
 logger = logging.getLogger(__name__)
 
@@ -984,9 +984,9 @@ class MarkerPoseEstimator:
             scaled_camera_matrix = size_ratio * camera_matrix.copy()
             scaled_camera_matrix[2, 2] = 1.0
             
-            # Convert quaternion to qvec format [x, y, z, w] for draw_2d_3d_matches
-            qvec = [quat[1], quat[2], quat[3], quat[0]]
-            
+            R_vis = quaternion_to_rotation_matrix(np.asarray(quat, dtype=np.float64))
+            rvec_vis, _ = cv2.Rodrigues(R_vis)
+
             # If using transformed image, we need special handling for projection
             if use_transformed_image and H_final is not None and original_image is not None:
                 # For transformed image, we need to:
@@ -996,9 +996,7 @@ class MarkerPoseEstimator:
                 
                 # First, project 3D points in original image coordinates
                 from visualization.draw_map import project_points
-                from scipy.spatial.transform import Rotation as R
-                rotation_matrix = R.from_quat([quat[1], quat[2], quat[3], quat[0]]).as_matrix()
-                rvec, _ = cv2.Rodrigues(rotation_matrix)
+                rvec, _ = cv2.Rodrigues(R_vis)
                 # Use original camera matrix for projection (not scaled)
                 points_2d_original = project_points(matched_3d, rvec, position, camera_matrix, dist_coeffs)
                 
@@ -1013,18 +1011,32 @@ class MarkerPoseEstimator:
                 points_2d_scaled = size_ratio * points_2d_transformed
                 
                 # Draw manually instead of using draw_2d_3d_matches
-                from visualization.draw_map import draw_points, draw_lines
+                from visualization.draw_map import draw_lines, draw_points
                 matches_img = vis_image.copy()
                 draw_points(matches_img, points_2d_scaled, radius=6)
                 draw_points(matches_img, matched_2d_scaled, radius=6, color=(255, 0, 0))
-                draw_lines(matches_img, matched_2d_scaled, points_2d_scaled)
+                draw_lines(
+                    matches_img,
+                    matched_2d_scaled,
+                    points_2d_scaled,
+                    color=(0, 255, 255),
+                    thickness=2,
+                )
                 cv2.putText(matches_img, "#inlers:" + str(len(matched_2d)), (20, 60),
                            cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 0, 255), 2)
             else:
                 # Normal case: not using transformed image
                 matched_2d_scaled = size_ratio * matched_2d
-                matches_img = draw_2d_3d_matches(vis_image, qvec, position, matched_2d_scaled,
-                                                 matched_3d, scaled_camera_matrix, dist_coeffs, return_img=True)
+                matches_img = draw_2d_3d_matches(
+                    vis_image,
+                    rvec_vis,
+                    position,
+                    matched_2d_scaled,
+                    matched_3d,
+                    scaled_camera_matrix,
+                    dist_coeffs,
+                    return_img=True,
+                )
 
             # Draw marker boundary and coordinate axes on transformed image
             # Pass original camera matrix and size_ratio for proper scaling
@@ -1056,8 +1068,16 @@ class MarkerPoseEstimator:
                     # So we just need to scale it to visualization size
                     matched_2d_original_scaled = size_ratio_orig * matched_2d
                     
-                    matches_img_orig = draw_2d_3d_matches(vis_original, qvec, position, matched_2d_original_scaled,
-                                                         matched_3d, scaled_camera_matrix_orig, dist_coeffs, return_img=True)
+                    matches_img_orig = draw_2d_3d_matches(
+                        vis_original,
+                        rvec_vis,
+                        position,
+                        matched_2d_original_scaled,
+                        matched_3d,
+                        scaled_camera_matrix_orig,
+                        dist_coeffs,
+                        return_img=True,
+                    )
                     
                     # Draw marker boundary and coordinate axes on original image
                     # Pass original camera matrix (not scaled) and size_ratio

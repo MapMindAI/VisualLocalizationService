@@ -209,6 +209,8 @@ class VisualLocalizer:
 
         summary_rows = []
         for img, name in candidate_images:
+            # DB images are stored as RGB; query_image is BGR — convert for side-by-side display
+            img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
             candidate_img_shape = np.array([[img.shape[0], img.shape[1]]], dtype=np.int32)
             ktps, desc, _ = self.superpoint.run(img)
             match_indices, match_scores = self.superglue.run(
@@ -217,7 +219,7 @@ class VisualLocalizer:
 
             match_vis = draw_map.draw_matches(
                 img0=query_image,
-                img1=img,
+                img1=img_bgr,
                 kpts0=query_ktps[0],
                 kpts1=ktps[0],
                 match_indices=match_indices,
@@ -462,12 +464,24 @@ class VisualLocalizer:
                 self.draw_matches_with_candidates(image, matches_2d_3d_img, top_k_ids, save_dir)
             return False, None, None, None, None, error_msg
 
-        # 2. Get superpoint feature score for matched points
-        matched_feature_scores = []
-        for i, match_idx in enumerate(match_indics):
-            if match_idx >= 0:
-                matched_feature_scores.append(scores[0, i])
-        matched_feature_scores = np.array(matched_feature_scores)
+        # 2. SuperPoint scores aligned with matched_2d (same filter as _match_descriptors_superglue)
+        sg_thresh = float(np.mean(match_scores))
+        matched_feature_scores = np.array(
+            [
+                scores[0, i]
+                for i in range(len(match_indics))
+                if match_indics[i] >= 0 and match_scores[i] >= sg_thresh
+            ],
+            dtype=np.float32,
+        )
+        matched_sg_scores = np.array(
+            [
+                match_scores[i]
+                for i in range(len(match_indics))
+                if match_indics[i] >= 0 and match_scores[i] >= sg_thresh
+            ],
+            dtype=np.float32,
+        )
 
         # 3. Solve PnP
         reproj_error = max(1, int(math.sqrt(image.shape[0] ** 2 + image.shape[1] ** 2) * 0.02))
@@ -541,7 +555,7 @@ class VisualLocalizer:
         reproj_errors = np.linalg.norm(projected - matched_2d_inliers, axis=1)
 
         feat_scores = matched_feature_scores[inliers] / np.max(matched_feature_scores[inliers])
-        match_scores_norm = match_scores[inliers] / np.max(match_scores[inliers])
+        match_scores_norm = matched_sg_scores[inliers] / np.max(matched_sg_scores[inliers])
         weights = feat_scores * match_scores_norm + 1e-6
         weights = weights / np.sum(weights)
         sigma2 = np.sum(weights * (reproj_errors**2)) / (
@@ -571,8 +585,8 @@ class VisualLocalizer:
             )
             matches_2d_3d_img = draw_map.draw_2d_3d_matches(
                 meshed_image,
-                quat,
-                position,
+                rot_vec,
+                tran_vec,
                 matched_2d_inliers,
                 matched_3d_inliers,
                 camera_matrix,

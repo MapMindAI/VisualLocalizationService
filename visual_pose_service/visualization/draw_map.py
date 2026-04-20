@@ -2,7 +2,6 @@ import numpy as np
 import open3d as o3d
 import os
 import cv2
-from scipy.spatial.transform import Rotation as R
 
 MESH = None
 
@@ -80,24 +79,43 @@ def draw_matches(
 
 
 def draw_2d_3d_matches(
-    image, qvec, tvec, matched_2d, matched_3d, K, dist_coeffs=None, return_img=False
+    image,
+    rvec,
+    tvec,
+    matched_2d,
+    matched_3d,
+    K,
+    dist_coeffs=None,
+    return_img=False,
+    reproj_line_color=(0, 255, 255),
+    reproj_line_thickness=2,
 ):
+    """
+    Use OpenCV rvec/tvec from solvePnP (same convention as projectPoints), not quaternion.
+    Draws each observation 2D keypoint linked to its reprojected 3D point (reprojection error viz).
+    Default line color is BGR yellow (0,255,255); matched_2d dots are red, reprojected dots green.
+    """
     if dist_coeffs is None:
         dist_coeffs = np.zeros((4, 1), dtype=np.float32)
 
     draw_image = image.copy()
 
-    # qvec should be xyzw
-    rotation_matrix = R.from_quat(qvec).as_matrix()
-    rvec, _ = cv2.Rodrigues(rotation_matrix)
+    rvec = np.asarray(rvec, dtype=np.float64).reshape(3, 1)
+    tvec = np.asarray(tvec, dtype=np.float64).reshape(3, 1)
 
     # draw points
     points_2d = project_points(matched_3d, rvec, tvec, K, dist_coeffs)
     draw_points(draw_image, points_2d, radius=6)
     draw_points(draw_image, matched_2d, radius=6, color=(255, 0, 0))
 
-    # draw lines
-    draw_lines(draw_image, matched_2d, points_2d)
+    # observation 2D —— reprojected 2D
+    draw_lines(
+        draw_image,
+        matched_2d,
+        points_2d,
+        color=reproj_line_color,
+        thickness=reproj_line_thickness,
+    )
     cv2.putText(
         draw_image,
         "#inlers:" + str(len(matched_2d)),
@@ -118,14 +136,13 @@ def draw_2d_3d_matches(
 
 # Project 3d points to image, if there is 2d keypoints, draw them as also
 def project_3d_points_to_image(
-    image, qvec, tvec, points_3d, K, dist_coeffs=None, keypoints_2d=None
+    image, rvec, tvec, points_3d, K, dist_coeffs=None, keypoints_2d=None
 ):
     if dist_coeffs is None:
         dist_coeffs = np.zeros((4, 1), dtype=np.float32)
 
-    # qvec should be xyzw
-    rotation_matrix = R.from_quat(qvec).as_matrix()
-    rvec, _ = cv2.Rodrigues(rotation_matrix)
+    rvec = np.asarray(rvec, dtype=np.float64).reshape(3, 1)
+    tvec = np.asarray(tvec, dtype=np.float64).reshape(3, 1)
 
     points_2d = project_points(points_3d, rvec, tvec, K, dist_coeffs)
     draw_points(image, points_2d)
