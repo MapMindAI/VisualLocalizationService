@@ -141,6 +141,17 @@ export PYTHONPATH="$(pwd)"
 python visual_pose_client.py
 ```
 
+Projection results:
+
+The left side of the image shows the mesh projection result and map point reprojection error, while the right side shows candidate image frames similar to the query image found by the bag-of-words model.
+
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="asset/proj_1.jpg" alt="projection 1" width="400"/></td>
+    <td align="center" width="50%"><img src="asset/proj_2.jpg" alt="projection 2" width="400"/></td>
+  </tr>
+</table>
+
 ---
 
 ## Production clients
