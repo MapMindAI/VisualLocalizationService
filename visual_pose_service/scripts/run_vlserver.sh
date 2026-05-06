@@ -4,15 +4,17 @@
 #   MODEL_PATH=/path/to/map ./scripts/run_vlserver.sh
 #   ./scripts/run_vlserver.sh --model_path /path/to/map --sp_address 127.0.0.1:8001
 # Environment (used when no CLI args are passed):
-#   MODEL_PATH   Required. Directory containing database_3d.db (and map assets).
-#   PORT         gRPC port (default: 40010)
-#   SP_ADDRESS   Triton gRPC host:port (default: 127.0.0.1:8001)
-#   POOL_SIZE    Worker processes (default: 4)
-#   TOP_K        Retrieval top-k (default: 3)
-#   MAX_WORKERS  gRPC thread pool (default: 10)
-#   LOG_LEVEL    DEBUG|INFO|WARNING|ERROR (default: INFO)
-#   LOG_FLAG     0|1 — 1 saves extra debug images/logs (default: 0)
-#   LOGS_DIR     Used when LOG_FLAG=1 (default: ./logs/visual_pose_server)
+#   MODEL_PATH     Required. Directory containing database_3d.db (and map assets).
+#   PORT           gRPC port (default: 40010)
+#   SP_ADDRESS     Triton gRPC host:port (default: 127.0.0.1:8001)
+#   POOL_SIZE      Worker processes (default: 4)
+#   TOP_K          Retrieval top-k (default: 3)
+#   MAX_WORKERS    gRPC thread pool (default: 10)
+#   LOG_LEVEL      DEBUG|INFO|WARNING|ERROR (default: INFO)
+#   LOG_FLAG       0|1 — 1 saves extra debug images/logs (default: 0)
+#   LOGS_DIR       Used when LOG_FLAG=1 (default: ./logs/visual_pose_server)
+#   SP_MODEL_NAME  Triton model name for SuperPoint (default: superpoint_onnx)
+#   SG_MODEL_NAME  Triton model name for SuperGlue/LightGlue (default: lightglue_onnx)
 
 set -euo pipefail
 
@@ -43,4 +45,6 @@ exec python3 "$SERVER_PY" \
   --max_workers "${MAX_WORKERS:-10}" \
   --log_level "${LOG_LEVEL:-INFO}" \
   --log_flag "${LOG_FLAG:-0}" \
-  --logs_dir "${LOGS_DIR:-${VPS_ROOT}/logs/visual_pose_server}"
+  --logs_dir "${LOGS_DIR:-${VPS_ROOT}/logs/visual_pose_server}" \
+  --sp_model_name "${SP_MODEL_NAME:-superpoint_onnx}" \
+  --sg_model_name "${SG_MODEL_NAME:-lightglue_onnx}"

@@ -5,35 +5,75 @@ import cv2
 
 
 def make_input(name, array, dtype):
+    dtype_map = {
+        "FP32": np.float32, "INT32": np.int32,
+        "UINT8": np.uint8,  "BOOL":  np.bool_,
+    }
+    if dtype in dtype_map:
+        array = array.astype(dtype_map[dtype])
     inp = grpcclient.InferInput(name, array.shape, dtype)
     inp.set_data_from_numpy(array)
     return inp
 
-# TODO(wenhao): Add error handling to prevent direct program exit
+
+_MAX_KP = 512
+
+
 class SuperGlue:
-    def __init__(self, triton_url, model_name="lightglue", model_version="1", match_thresh=0.2):
+    """
+    Both EasyTensorRT model variants share the same interface:
+        lightglue_onnx : FP32 desc, fixed 512 slots + mask, threshold [1,1], output 'score'
+        lightglue_trt  : same as above (converted from ONNX by convert_models.sh)
+    """
+
+    def __init__(self, triton_url, model_name="lightglue_onnx", model_version="1", match_thresh=0.2):
         self.grpc_client = grpcclient.InferenceServerClient(url=triton_url, verbose=False)
         self.model_version = model_version
         self.model_name = model_name
-        self.match_thresh_np = np.array([match_thresh], dtype=np.float32)  # [1]
+        self.match_thresh = match_thresh
+        self.max_point_num = _MAX_KP
+
         self.desired_outputs = [
             grpcclient.InferRequestedOutput("match_indices"),
-            grpcclient.InferRequestedOutput("match_scores"),
+            grpcclient.InferRequestedOutput("score"),
         ]
-        self.max_point_num = 4000
+
+    def _pad_to_512(self, arr, n):
+        """(1, N, d) → (1, 512, d), zero-padded to 512 slots"""
+        trunc = arr[:, :n, :].astype(np.float32)
+        pad   = np.zeros((1, _MAX_KP - n, arr.shape[2]), dtype=np.float32)
+        return np.concatenate([trunc, pad], axis=1)
 
     def run(self, kpts0, desc0, img_shape0, kpts1, desc1, img_shape1):
+        if kpts0.ndim == 2: kpts0 = kpts0[np.newaxis]
+        if kpts1.ndim == 2: kpts1 = kpts1[np.newaxis]
+        if desc0.ndim == 2: desc0 = desc0[np.newaxis]
+        if desc1.ndim == 2: desc1 = desc1[np.newaxis]
+
+        n0 = min(kpts0.shape[1], _MAX_KP)
+        n1 = min(kpts1.shape[1], _MAX_KP)
+
+        kpts0_p = self._pad_to_512(kpts0, n0)
+        kpts1_p = self._pad_to_512(kpts1, n1)
+        desc0_p = self._pad_to_512(desc0, n0)
+        desc1_p = self._pad_to_512(desc1, n1)
+
+        mask0 = np.zeros((1, _MAX_KP, 1), dtype=np.bool_); mask0[0, :n0, 0] = True
+        mask1 = np.zeros((1, _MAX_KP, 1), dtype=np.bool_); mask1[0, :n1, 0] = True
+        threshold = np.array([[self.match_thresh]], dtype=np.float32)
+
         inputs = [
-            make_input("kpts0", kpts0, "FP32"),
-            make_input("kpts1", kpts1, "FP32"),
-            make_input("desc0", desc0, "UINT8"),
-            make_input("desc1", desc1, "UINT8"),
+            make_input("kpts0",      kpts0_p,    "FP32"),
+            make_input("kpts1",      kpts1_p,    "FP32"),
+            make_input("desc0",      desc0_p,    "FP32"),
+            make_input("desc1",      desc1_p,    "FP32"),
+            make_input("mask0",      mask0,      "BOOL"),
+            make_input("mask1",      mask1,      "BOOL"),
             make_input("img_shape0", img_shape0, "INT32"),
             make_input("img_shape1", img_shape1, "INT32"),
-            make_input("match_threshold", self.match_thresh_np, "FP32"),
+            make_input("threshold",  threshold,  "FP32"),
         ]
 
-        # Run inference
         response = self.grpc_client.infer(
             model_name=self.model_name,
             model_version=self.model_version,
@@ -41,96 +81,8 @@ class SuperGlue:
             outputs=self.desired_outputs,
         )
 
-        # Get results
-        match_indices = response.as_numpy("match_indices")[0]  # shape: (N0,)
-        match_scores = response.as_numpy("match_scores")[0]  # shape: (N0,)
+        match_indices = response.as_numpy("match_indices")[0, :n0]
+        match_scores  = response.as_numpy("score")[0, :n0]
+        # mask out matches pointing into the padding region
+        match_indices = np.where(match_indices < n1, match_indices, -1)
         return match_indices, match_scores
-
-
-def draw_matches(
-    img0,
-    img1,
-    kpts0,
-    kpts1,
-    match_indices,
-    match_scores,
-    max_display=5000,
-    score_thresh=0.0,
-):
-    """
-    Draw matches between two images.
-
-    Args:
-        img0, img1: Input grayscale or color images as NumPy arrays.
-        kpts0, kpts1: Keypoints in image0 and image1, shape (N0, 2) and (N1, 2).
-        match_indices: Array of shape (N0,), giving the index in kpts1 matched to each keypoint in kpts0, or -1.
-        match_scores: Array of shape (N0,), confidence score for each match.
-        max_display: Max number of matches to draw.
-        score_thresh: Minimum confidence threshold to show a match.
-    """
-
-    img0_color = cv2.cvtColor(img0, cv2.COLOR_GRAY2BGR) if img0.ndim == 2 else img0.copy()
-    img1_color = cv2.cvtColor(img1, cv2.COLOR_GRAY2BGR) if img1.ndim == 2 else img1.copy()
-
-    h0, w0 = img0_color.shape[:2]
-    h1, w1 = img1_color.shape[:2]
-    out_img = np.zeros((max(h0, h1), w0 + w1, 3), dtype=np.uint8)
-    out_img[:h0, :w0] = img0_color
-    out_img[:h1, w0:] = img1_color
-
-    # Shift keypoints in img1 for visualization
-    kpts1_shifted = kpts1 + np.array([w0, 0], dtype=np.float32)
-
-    # Gather good matches
-    matches = [
-        (i, match_indices[i], match_scores[i])
-        for i in range(len(match_indices))
-        if match_indices[i] >= 0 and match_scores[i] >= score_thresh
-    ]
-    matches = sorted(matches, key=lambda x: -x[2])[:max_display]
-
-    for i, j, score in matches:
-        pt0 = tuple(map(int, kpts0[i]))
-        pt1 = tuple(map(int, kpts1_shifted[j]))
-        color = (0, int(score * 255), 255 - int(score * 255))
-        cv2.circle(out_img, pt0, 5, color, -1)
-        cv2.circle(out_img, pt1, 5, color, -1)
-        cv2.line(out_img, pt0, pt1, color, 3)
-
-    # Show image
-    from matplotlib import pyplot as plt
-
-    plt.figure(figsize=(20, 10))
-    plt.imshow(out_img[..., ::-1])
-    plt.axis("off")
-    plt.title("SuperGlue Matches")
-    plt.show()
-
-
-if __name__ == "__main__":
-    from superpoint import SuperPoint
-
-    superpoint = SuperPoint("192.168.19.150:8001")
-    superglue = SuperGlue("192.168.19.150:8001")
-
-    img_dir = "/mnt/ml-experiment-data/yeliu/gaussian_splatting/GoPro/NanshaOffice/"
-    temp_dir = "images/GS010086_0/"
-    image_1 = cv2.imread(img_dir + "test.jpg")
-    image_2 = cv2.imread(img_dir + temp_dir + "00121.jpg")
-
-    time_ms_begin = time.time() * 1000
-    ktps1, descps1, _ = superpoint.run(image_1)
-    ktps2, descps2, _ = superpoint.run(image_2)
-    time_ms_end = time.time() * 1000
-
-    img_shape1 = np.array([[image_1.shape[0], image_1.shape[1]]], dtype=np.int32)  # [1, 2]
-    img_shape2 = np.array([[image_2.shape[0], image_2.shape[1]]], dtype=np.int32)  # [1, 2]
-    match_indices, match_scores = superglue.run(
-        ktps1, descps1, img_shape1, ktps2, descps2, img_shape2
-    )
-    time_ms_end_sg = time.time() * 1000
-
-    print("super point time :", time_ms_end - time_ms_begin, "ms")
-    print("super glue time :", time_ms_end_sg - time_ms_end, "ms")
-
-    draw_matches(image_1, image_2, ktps1[0], ktps2[0], match_indices, match_scores)

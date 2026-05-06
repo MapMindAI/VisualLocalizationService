@@ -1,0 +1,102 @@
+services:
+  visual_pose_server:
+    build:
+      context: ./visual_pose_service
+      dockerfile: ../docker/Dockerfile
+    image: visualposeserver:latest
+    ports:
+      - "${VPS_PORT:-40010}:40010"
+    environment:
+      MODEL_PATH: /data/map
+      SP_ADDRESS: "${SP_ADDRESS:-tritonserver:8001}"
+      PORT: "40010"
+      POOL_SIZE: "${POOL_SIZE:-4}"
+      TOP_K: "${TOP_K:-3}"
+      MAX_WORKERS: "${MAX_WORKERS:-10}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      LOG_FLAG: "${LOG_FLAG:-0}"
+      LOGS_DIR: /logs
+      # onnx profile: superpoint_onnx / lightglue_onnx (default)
+      # trt  profile: superpoint_trt / lightglue_trt
+      SP_MODEL_NAME: "${SP_MODEL_NAME:-superpoint_onnx}"
+      SG_MODEL_NAME: "${SG_MODEL_NAME:-lightglue_onnx}"
+    volumes:
+      - ${MODEL_PATH}:/data/map:ro
+      - ${LOGS_DIR:-./logs}:/logs
+    networks:
+      - vls_net
+    restart: unless-stopped
+
+  # CPU-only Triton: docker compose --profile cpu up
+  triton_server_cpu:
+    profiles: [cpu]
+    image: ghcr.io/mapmindai/tritonserver_amd64:latest
+    command: tritonserver --model-repository=/repo/model_repository
+    ports:
+      - "8001:8001"
+    volumes:
+      - ${TRITON_MODEL_DIR}:/repo
+    networks:
+      vls_net:
+        aliases:
+          - tritonserver
+    restart: unless-stopped
+
+  # ONNX (GPU) Triton: docker compose --profile onnx up
+  triton_server_onnx:
+    profiles: [onnx]
+    image: ghcr.io/mapmindai/tritonserver_amd64:latest
+    command: tritonserver --model-repository=/repo/model_repository
+    ports:
+      - "8001:8001"
+    volumes:
+      - ${TRITON_MODEL_DIR}:/repo
+    networks:
+      vls_net:
+        aliases:
+          - tritonserver
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # TensorRT (GPU) Triton: docker compose --profile trt up
+  triton_server_trt:
+    profiles: [trt]
+    image: ghcr.io/mapmindai/tritonserver_amd64:latest
+    command: >
+      bash -c "
+        echo '====> Step 1: Checking environment' &&
+        nvidia-smi &&
+        echo '' &&
+        echo '====> Step 2: Check TRT plan files' &&
+        bash /repo/model_trt/convert_models.sh &&
+        echo '' &&
+        echo '====> Step 3: Starting Triton' &&
+        tritonserver --model-repository=/repo/model_repository_trt
+      "
+    ports:
+      - "8001:8001"
+    volumes:
+      - ${TRITON_MODEL_DIR}:/repo
+      - ${TRITON_MODEL_DIR}/workspace:/workspace
+    networks:
+      vls_net:
+        aliases:
+          - tritonserver
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+networks:
+  vls_net:
+    driver: bridge

@@ -407,7 +407,9 @@ def process_task(worker_id, task, estimator, log_flag, log_dir):
         )
 
     except Exception as e:
+        import traceback
         error_msg = f"Worker {worker_id} - Task {task.id} : Failed to process task: {e}"
         logging.error(error_msg)
+        logging.error(traceback.format_exc())
         task.error = error_msg
 

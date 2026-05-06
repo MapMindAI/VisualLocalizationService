@@ -70,6 +70,43 @@ export PYTHONPATH="/absolute/path/to/VisualLocalizationService/visual_pose_servi
 
 ---
 
+## Run with Docker Compose
+
+Requires **Docker Compose** — install it following the [official guide](https://docs.docker.com/compose/install/).
+
+Docker Compose starts both `visual_pose_server` and a Triton server together. Choose the Triton backend via `--profile`.
+
+**Required environment variables:**
+
+| Variable | Description |
+|----------|-------------|
+| `MODEL_PATH` | Map root directory (must contain `database_3d.db`) |
+| `TRITON_MODEL_DIR` | Triton model directory — clone [MapMindAI/EasyTensorRT](https://github.com/MapMindAI/EasyTensorRT) and point to the cloned path |
+
+```bash
+git clone https://github.com/MapMindAI/EasyTensorRT
+```
+
+```bash
+# CPU (no GPU required)
+MODEL_PATH=/path/to/map TRITON_MODEL_DIR=/path/to/EasyTensorRT \
+  docker compose --profile cpu up
+
+# ONNX + GPU
+MODEL_PATH=/path/to/map TRITON_MODEL_DIR=/path/to/EasyTensorRT \
+  docker compose --profile onnx up
+
+# TensorRT + GPU (converts models on first launch)
+MODEL_PATH=/path/to/map TRITON_MODEL_DIR=/path/to/EasyTensorRT \
+  docker compose --profile trt up
+```
+
+The `visual_pose_server` image is built automatically on first launch; subsequent runs reuse the cached image. To force a rebuild: `docker compose build visual_pose_server`.
+
+Optional overrides (pass as environment variables): `VPS_PORT` (default `40010`), `POOL_SIZE` (default `4`), `TOP_K` (default `3`), `MAX_WORKERS` (default `10`), `LOG_LEVEL` (default `INFO`), `LOG_FLAG` (default `0`), `LOGS_DIR` (default `./logs`).
+
+---
+
 ## Run the visual pose server
 
 ### Option A: helper script (recommended)

@@ -3,13 +3,27 @@ import numpy as np
 import time
 import cv2
 
-# TODO(wenhao): Add error handling to prevent direct program exit
+
 class SuperPoint:
+    """
+    Supports two EasyTensorRT model variants, selected by model_name:
+
+    ONNX  (superpoint_onnx):
+        image     : NCHW (1, 1, H, W)  UINT8,  max_batch_size=0
+        threshold : FP32 [1, 1]
+        outputs   : kpts (-1,-1,2)  scores (-1,-1)  descps (-1,-1,-1) FP32, variable N
+
+    TRT   (superpoint_trt, converted from ONNX by convert_models.sh):
+        image     : NCHW (1, 1, H, W)  UINT8,  max_batch_size=0
+        threshold : FP32 [1, 1]
+        outputs   : kpts (-1,512,2)  scores (-1,512)  descps (-1,512,256) FP32, fixed 512 slots + mask
+    """
+
     def __init__(
         self,
         triton_url,
-        model_name="superpoint_trt",
-        model_version="5",
+        model_name="superpoint_onnx",
+        model_version="",
         max_image_shape=1080,
         keypoint_thresh=0.015,
     ):
@@ -17,18 +31,23 @@ class SuperPoint:
         self.max_image_shape = max_image_shape
         self.model_version = model_version
         self.model_name = model_name
+        # TRT outputs fixed 512 slots + validity mask; ONNX outputs variable N directly
+        self.trt_fixed = "trt" in model_name and "onnx" not in model_name
 
+        # both models use threshold shape [1, 1]
         keypoint_thresh_np = np.array([[keypoint_thresh]], dtype=np.float32)
         self.input_thresh = grpcclient.InferInput(
             "keypoint_threshold", keypoint_thresh_np.shape, "FP32"
         )
         self.input_thresh.set_data_from_numpy(keypoint_thresh_np)
-        # Define desired outputs
+
         self.desired_outputs = [
             grpcclient.InferRequestedOutput("kpts"),
             grpcclient.InferRequestedOutput("scores"),
             grpcclient.InferRequestedOutput("descps"),
         ]
+        if self.trt_fixed:
+            self.desired_outputs.append(grpcclient.InferRequestedOutput("mask"))
 
     def run(self, image_numpy):
         image = (
@@ -37,7 +56,6 @@ class SuperPoint:
             else image_numpy.copy()
         )
         image_size = (image.shape[1], image.shape[0])
-        # resize the image, if image size too large
         if image.shape[1] > self.max_image_shape:
             new_height = int(self.max_image_shape * image.shape[0] / image.shape[1])
             image_size = (self.max_image_shape, new_height)
@@ -47,58 +65,39 @@ class SuperPoint:
             image_size = (new_width, self.max_image_shape)
             image = cv2.resize(image, image_size).astype(np.uint8)
 
-        image = np.expand_dims(image, axis=(0, 3))  # Shape: (1, H, W, 1)
-        # Define model inputs
-        inputs = []
-        input_image = grpcclient.InferInput("image", image.shape, "UINT8")
-        input_image.set_data_from_numpy(image)
-        inputs.append(input_image)
-        inputs.append(self.input_thresh)
+        # both models use NCHW layout: (1, 1, H, W)
+        image_tensor = np.expand_dims(image, axis=(0, 1))
+        input_image = grpcclient.InferInput("image", image_tensor.shape, "UINT8")
+        input_image.set_data_from_numpy(image_tensor)
 
-        # Run inference
         response = self.grpc_client.infer(
             model_name=self.model_name,
             model_version=self.model_version,
-            inputs=inputs,
+            inputs=[input_image, self.input_thresh],
             outputs=self.desired_outputs,
         )
 
-        # Fetch outputs
-        kpts = response.as_numpy("kpts")[0]  # shape: (N, 2)
-        scores = response.as_numpy("scores")    # shape: (N,)
-        descps = response.as_numpy("descps")  # shape: (N, 256)
+        kpts   = response.as_numpy("kpts")[0]    # (N, 2) or (512, 2)
+        scores = response.as_numpy("scores")     # (1, N) or (1, 512)
+        descps = response.as_numpy("descps")     # (1, N, 256) or (1, 512, 256)
 
-        kpts_new = []
-        # resize the kpts to original size
+        if self.trt_fixed:
+            # filter out padded slots using the validity mask
+            mask  = response.as_numpy("mask")    # (1, 512) bool
+            valid = np.where(mask[0])[0]
+            kpts   = kpts[valid]
+            descps = descps[:, valid, :]
+            scores = scores[:, valid]
 
         factor_x = image_numpy.shape[1] / image_size[0]
         factor_y = image_numpy.shape[0] / image_size[1]
-        for i in range(kpts.shape[0]):
-            kpts_new.append([factor_x * kpts[i][0], factor_y * kpts[i][1]])
+        kpts_scaled = np.array(
+            [[factor_x * kpts[i][0], factor_y * kpts[i][1]] for i in range(len(kpts))],
+            dtype=np.float32,
+        )
 
-        return np.array([kpts_new], dtype=np.float32), descps, scores
-
-
-if __name__ == "__main__":
-    superpoint = SuperPoint("192.168.19.150:8001")
-
-    image_1 = cv2.imread("/mnt/ml-experiment-data/yeliu/gaussian_splatting/GoPro/NanshaOffice/test2.jpg")
-
-    time_ms_begin = time.time() * 1000
-    ktps, descps, _ = superpoint.run(image_1)
-    time_ms_end = time.time() * 1000
-
-    print(f"extract {len(ktps[0])} points, used {time_ms_end - time_ms_begin}ms")
-
-    from matplotlib import pyplot as plt
-
-    for i in range(ktps[0].shape[0]):
-        pt0 = tuple(map(int, ktps[0][i]))
-        cv2.circle(image_1, pt0, 3, (0, 255, 0), -1)
-
-    # image_2 = cv2.imread("/Mobili/Data/2.jpg")
-    plt.figure(figsize=(12, 6))
-    plt.imshow(image_1[..., ::-1])
-    plt.axis("off")
-    plt.title("SuperPoint")
-    plt.show()
+        # unified output shapes: (1,N,2), (1,N,256), (1,N)
+        kpts_out   = kpts_scaled[np.newaxis]
+        descps_out = descps if descps.ndim == 3 else descps[np.newaxis]
+        scores_out = scores if scores.ndim == 2 else scores[np.newaxis]
+        return kpts_out, descps_out, scores_out

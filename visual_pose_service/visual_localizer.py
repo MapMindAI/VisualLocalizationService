@@ -16,7 +16,7 @@ from optimization.pnp_optimization import pnp_ransac_optimization_with_gravity
 
 logger = logging.getLogger(__name__)
 
-MESH_NAME = 'output/tsdf_mesh.ply'
+MESH_NAME     = 'output/tsdf_mesh.ply'
 DATABASE_NAME = 'database_3d.db'
 
 GRAVITY_WORLD = np.array([0, 0, 1])
@@ -32,19 +32,19 @@ class VisualLocalizer:
     Visual Localizer for estimating camera pose using COLMAP database.
     """
 
-    def __init__(self, sp_address: str, top_k=3):
+    def __init__(self, sp_address: str, top_k=3, sp_model_name="superpoint_onnx", sg_model_name="lightglue_onnx"):
         self.database_path = None
-        self.db_images = None  # {image_id: cv Mat} from database
-        self.db_descriptors = None  # {image_id: np.array[N,Dim_of_Desc]} from database
-        self.db_point3D_depth = None  # {image_id: np.array[N,3]} from database
-        self.db_keypoints = None  # {image_id: np.array[N,2]} from database
+        self.db_images = None
+        self.db_descriptors = None    # {image_id: np.array[N,256]} uint8, from DB
+        self.db_point3D_depth = None  # {image_id: np.array[N,3]}
+        self.db_keypoints = None      # {image_id: np.array[N,2+]}
         self.db_image_poses = None
 
         self.db_image_shape = None  # shape of database images
         self._initialized = False
 
-        self.superpoint = SuperPoint(sp_address)
-        self.superglue = SuperGlue(sp_address)
+        self.superpoint = SuperPoint(sp_address, model_name=sp_model_name)
+        self.superglue = SuperGlue(sp_address, model_name=sg_model_name)
         self.retrieval = None
         self.top_k = top_k  # retrieval parameter
 
@@ -82,7 +82,7 @@ class VisualLocalizer:
     def _load_info_from_db(self, db_path: str):
         """Load descriptors from the SQLite database(db file)"""
         try:
-            conn = sqlite3.connect(db_path)
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
             cursor = conn.cursor()
             logger.info(f"Connected to database at {db_path}")
         except sqlite3.Error as e:
@@ -123,13 +123,16 @@ class VisualLocalizer:
         self.db_image_poses = image_poses
         logger.info(f"Load {len(self.images)} images from {db_path}")
 
-        # Load db_descriptors
-        # TODO(wenhao): Add more checks for db info
+        # Load db_descriptors: decode EGS uint8 → float32 L2-normalised
+        # EGS encoding: uint8 = clip(255*(fp32+0.5), 0, 255)
         descriptors = {}
         cursor.execute("SELECT image_id, rows, cols, data FROM descriptors")
         for image_id, rows, cols, data in cursor.fetchall():
-            desc = np.frombuffer(data, dtype=np.uint8)
-            descriptors[image_id] = desc.reshape(-1, cols)
+            desc = np.frombuffer(data, dtype=np.uint8).reshape(-1, cols).astype(np.float32)
+            desc = desc / 255.0 - 0.5
+            norms = np.linalg.norm(desc, axis=1, keepdims=True)
+            desc = desc / np.where(norms > 0, norms, 1.0)
+            descriptors[image_id] = desc
         self.db_descriptors = descriptors
         logger.info(f"Loaded descriptors for {len(self.db_descriptors)} images from {db_path}")
 
@@ -147,22 +150,26 @@ class VisualLocalizer:
         self.db_point3D_depth = point3D_depth
         self.db_keypoints = keypoints
         logger.info(
-            f"Loaded keypoints and point3D_depth for {len(self.db_descriptors)} images from {db_path}"
+            f"Loaded keypoints and point3D_depth for {len(self.db_keypoints)} images from {db_path}"
         )
 
         conn.close()
 
     def _collect_candidate_3D_points_from_depth(self, top_k_ids):
-        top_k_ids = set(top_k_ids)  # Use set for faster lookup
-        candidate_xy = []
+        """
+        Collect 2D keypoints, 3D coords, and descriptors from top-K DB images.
+        Used when the DB was built with the same model as the inference pipeline
+        (e.g. both use EasyTensorRT superpoint_onnx), so descriptors are directly
+        compatible and image-to-image re-extraction is not needed.
+        """
+        candidate_xy  = []
         candidate_xyz = []
         candidate_desc = []
 
-        for image_id in top_k_ids:
-            # every point2d has responding point3d,
+        for image_id in set(top_k_ids):
             keypoints_desc = self.db_descriptors[image_id]
-            point3D_depth = self.db_point3D_depth[image_id]
-            keypoints = self.db_keypoints[image_id]
+            point3D_depth  = self.db_point3D_depth[image_id]
+            keypoints      = self.db_keypoints[image_id]
             for i in range(len(keypoints_desc)):
                 candidate_xyz.append(point3D_depth[i])
                 candidate_desc.append(keypoints_desc[i])
@@ -172,9 +179,9 @@ class VisualLocalizer:
             logger.error("No candidate 3D points found!")
             return None, None, None
         return (
-            np.array(candidate_xy, dtype=np.float32),
-            np.array(candidate_xyz, dtype=np.float32),
-            np.array(candidate_desc, dtype=np.uint8),
+            np.array(candidate_xy,   dtype=np.float32),
+            np.array(candidate_xyz,  dtype=np.float32),
+            np.array(candidate_desc),
         )
 
     def set_current_task_id(self, task_id):
@@ -346,7 +353,7 @@ class VisualLocalizer:
             f"Task {self.current_task_id} : Top-{len(top_k_ids)} candidate frames: {top_k_ids}"
         )
 
-        # Collect Candidate 3D points
+        # Collect candidate 3D points from top-k DB images
         candidate_xy, candidate_xyz, candidate_desc = self._collect_candidate_3D_points_from_depth(
             top_k_ids
         )
@@ -354,12 +361,12 @@ class VisualLocalizer:
         logger.info(
             f"Task {self.current_task_id} : Collected candidate 3D points took {candidate_time:.5f} seconds"
         )
+        start_time = time.time()
 
         if candidate_xy is None or candidate_xyz is None or candidate_desc is None:
             error_msg = "candidate_xy/candidate_xyz/candidate_desc is None!"
             return False, None, None, None, None, error_msg
 
-        # Match features and get pose
         ok, position, rotation, cov_rot, cov_tran, error_msg = self._match_features(
             image,
             keypoints,
@@ -387,17 +394,16 @@ class VisualLocalizer:
         img_shape,
         score_thresh=0.0,
     ):
-        # superglue input desc should be (1,N,256), type is UINT8
-        # keypoints should be FP32
-        # max keypoints size supported by superglue is 4096
         max_num = min(self.superglue.max_point_num, point3D_xyz.shape[0])
         score_thresh = np.float32(score_thresh)
         point3D_xy = np.expand_dims(point3D_xy[:max_num, :], axis=0)
         point3D_xy = np.array(point3D_xy, dtype=np.float32)
         point3D_desc = np.expand_dims(point3D_desc[:max_num, :], axis=0)
+
         match_indices, match_scores = self.superglue.run(
             query_keypoints, query_desc, img_shape, point3D_xy, point3D_desc, self.db_image_shape
         )
+
         score_thresh = np.mean(match_scores)
         matches = [
             (i, match_indices[i], match_scores[i])
@@ -446,7 +452,7 @@ class VisualLocalizer:
             logger.error(error_msg)
             return False, None, None, None, None, error_msg
 
-        # 1. Match descriptors between input image and 3d points
+        # Match descriptors between query image and candidate 3D points
         img_shape = np.array([[image.shape[0], image.shape[1]]], dtype=np.int32)
         matched_2d, matched_3d, match_indics, match_scores = self._match_descriptors_superglue(
             keypoints, descriptors, point3D_xy, point3D_xyz, point3D_desc, img_shape
@@ -457,29 +463,22 @@ class VisualLocalizer:
         start_time = time.time()
 
         if matched_2d is None or matched_3d is None:
-            # No pose, draw retrieval result only
             error_msg = "matched_2d/matched_3d is None!"
             if draw_flag == 1 and save_dir != '':
                 matches_2d_3d_img = image
                 self.draw_matches_with_candidates(image, matches_2d_3d_img, top_k_ids, save_dir)
             return False, None, None, None, None, error_msg
 
-        # 2. SuperPoint scores aligned with matched_2d (same filter as _match_descriptors_superglue)
+        # SuperPoint scores aligned with matched_2d
         sg_thresh = float(np.mean(match_scores))
         matched_feature_scores = np.array(
-            [
-                scores[0, i]
-                for i in range(len(match_indics))
-                if match_indics[i] >= 0 and match_scores[i] >= sg_thresh
-            ],
+            [scores[0, i] for i in range(len(match_indics))
+             if match_indics[i] >= 0 and match_scores[i] >= sg_thresh],
             dtype=np.float32,
         )
         matched_sg_scores = np.array(
-            [
-                match_scores[i]
-                for i in range(len(match_indics))
-                if match_indics[i] >= 0 and match_scores[i] >= sg_thresh
-            ],
+            [match_scores[i] for i in range(len(match_indics))
+             if match_indics[i] >= 0 and match_scores[i] >= sg_thresh],
             dtype=np.float32,
         )
 

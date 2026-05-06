@@ -21,7 +21,7 @@ RETRIEVAL_BOW_VECTORS_PATH = "retrieval_bow_vectors.npy"
 def compute_word(kmeans, desc):
     word_ids = kmeans.predict(desc)
     hist, _ = np.histogram(word_ids, bins=np.arange(RETRIEVAL_BOW_NUM_CLUSTERS + 1))
-    hist = hist.astype("float32") / np.linalg.norm(hist)
+    hist = (hist / np.linalg.norm(hist)).astype(np.float32)
     return hist
 
 
@@ -49,11 +49,13 @@ class BowRetireval:
     def __init__(self, model_path, top_k=5, db_image_poses=None):
         self.top_k = top_k
         self.kmeans = joblib.load(os.path.join(model_path, RETRIEVAL_BOW_KMEANS_PATH))
+        self.kmeans.cluster_centers_ = self.kmeans.cluster_centers_.astype(np.float32)
         self.image_ids = np.load(
             os.path.join(model_path, RETRIEVAL_BOW_IDS_PATH), allow_pickle=True
         )
 
         image_bow_vectors = np.load(os.path.join(model_path, RETRIEVAL_BOW_VECTORS_PATH))
+        image_bow_vectors = np.ascontiguousarray(image_bow_vectors, dtype=np.float32)
         self.index = faiss.IndexFlatL2(image_bow_vectors.shape[1])
         self.index.add(image_bow_vectors)
 
@@ -74,10 +76,10 @@ class BowRetireval:
         self.kd_tree = cKDTree(np.array(kd_points))
 
     def retrieve_bow(self, desc):
-        word_ids = self.kmeans.predict(desc)
+        word_ids = self.kmeans.predict(desc.astype(np.float32))
         hist, _ = np.histogram(word_ids, bins=np.arange(RETRIEVAL_BOW_NUM_CLUSTERS + 1))
-        hist = hist.astype("float32") / np.linalg.norm(hist)
-        D, I = self.index.search(hist.reshape(1, -1), self.top_k)
+        hist_f32 = np.ascontiguousarray((hist / np.linalg.norm(hist)), dtype=np.float32).reshape(1, -1)
+        D, I = self.index.search(hist_f32, self.top_k)
         return [self.image_ids[i] for i in I[0]]
 
     # prior_pose = np.array([rot.w, rot.x, rot.y, rot.z, trans.x, trans.y, trans.z])
@@ -119,17 +121,17 @@ if __name__ == "__main__":
     sqlite_cursor = sqlite_conn.cursor()
 
     def get_descroptors(image_id):
-        #  (image_id, rows, cols, data)
         sqlite_cursor.execute("SELECT * FROM descriptors WHERE image_id = ?", (str(image_id),))
         result = sqlite_cursor.fetchone()
         assert result is not None
-        desc = np.frombuffer(result[3], dtype=np.uint8).reshape((result[1], result[2]))
-        return desc
+        desc = np.frombuffer(result[3], dtype=np.uint8).reshape((result[1], result[2])).astype(np.float32)
+        desc = desc / 255.0 - 0.5
+        norms = np.linalg.norm(desc, axis=1, keepdims=True)
+        return desc / np.where(norms > 0, norms, 1.0)
 
-    # Execute a SELECT query to get all rows from the table
-    sqlite_cursor.execute(f"SELECT * FROM images;")
+    sqlite_cursor.execute("SELECT * FROM images;")
     rows = sqlite_cursor.fetchall()
-    # Fetch all the rows
+
     all_descriptors = []
     progress_bar = tqdm(range(0, len(rows)), desc="Process Fetch All Descriptors")
 

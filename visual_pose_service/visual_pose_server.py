@@ -36,6 +36,8 @@ def worker_process(
     model_path,
     sp_address,
     top_k,
+    sp_model_name,
+    sg_model_name,
     log_flag,
     log_dir,
     task_queue,
@@ -44,7 +46,7 @@ def worker_process(
 ):
     try:
         # Create localizer instance
-        localizer = visual_localizer.VisualLocalizer(sp_address, top_k)
+        localizer = visual_localizer.VisualLocalizer(sp_address, top_k, sp_model_name, sg_model_name)
         localizer.load_database(model_path)
 
         logging.info(f"Worker {worker_id} started successfully")
@@ -93,6 +95,8 @@ class VisualPoseService(visual_pose_service_pb2_grpc.VisualPoseServiceServicer):
         log_flag: int,
         log_dir: str,
         pool_size: int = 4,
+        sp_model_name: str = "superpoint_onnx",
+        sg_model_name: str = "lightglue_onnx",
     ):
         self.model_path = model_path
         self.log_flag = log_flag
@@ -100,6 +104,8 @@ class VisualPoseService(visual_pose_service_pb2_grpc.VisualPoseServiceServicer):
         self.pool_size = pool_size
         self.sp_address = sp_address
         self.top_k = top_k
+        self.sp_model_name = sp_model_name
+        self.sg_model_name = sg_model_name
 
         self.task_queue = mp.Queue(maxsize=2000)
         self.result_queue = mp.Queue()
@@ -119,6 +125,8 @@ class VisualPoseService(visual_pose_service_pb2_grpc.VisualPoseServiceServicer):
                     model_path,
                     sp_address,
                     top_k,
+                    sp_model_name,
+                    sg_model_name,
                     log_flag,
                     log_dir,
                     self.task_queue,
@@ -293,6 +301,8 @@ class VisualPoseServer:
         port: int = 40010,
         max_workers: int = 10,
         pool_size: int = 4,
+        sp_model_name: str = "superpoint_onnx",
+        sg_model_name: str = "lightglue_onnx",
     ):
         self.model_path = model_path
         self.port = port
@@ -305,6 +315,8 @@ class VisualPoseServer:
         self.log_flag = log_flag
         self.log_dir = log_dir
         self.pool_size = pool_size
+        self.sp_model_name = sp_model_name
+        self.sg_model_name = sg_model_name
         self._shutdown_event = threading.Event()
 
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -335,6 +347,8 @@ class VisualPoseServer:
                 self.log_flag,
                 self.log_dir,
                 self.pool_size,
+                self.sp_model_name,
+                self.sg_model_name,
             )
             visual_pose_service_pb2_grpc.add_VisualPoseServiceServicer_to_server(
                 visual_pose_service, self.grpc_server
@@ -434,6 +448,18 @@ def main():
         default=4,
         help='Localizer instance pool size (default: 4)',
     )
+    parser.add_argument(
+        '--sp_model_name',
+        type=str,
+        default='superpoint_onnx',
+        help='Triton model name for SuperPoint (default: superpoint_onnx)',
+    )
+    parser.add_argument(
+        '--sg_model_name',
+        type=str,
+        default='lightglue_onnx',
+        help='Triton model name for SuperGlue/LightGlue (default: lightglue_onnx)',
+    )
 
     args = parser.parse_args()
 
@@ -456,6 +482,8 @@ def main():
         log_flag=args.log_flag,
         log_dir=log_dir,
         pool_size=args.pool_size,
+        sp_model_name=args.sp_model_name,
+        sg_model_name=args.sg_model_name,
     )
 
     logging.info("Starting Visual Pose Server...")
