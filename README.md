@@ -1,13 +1,13 @@
 # VisualLocalizationService
 
-gRPC service for visual localization: the server estimates camera pose using a prebuilt map and a Triton-hosted SuperPoint/SuperGlue stack. This repository includes a **test client** (`visual_pose_client.py`) for smoke tests and load experiments.
+gRPC service for visual localization: the server estimates camera pose from an encoded query image, camera intrinsics, and an optional localization prior. It uses a prebuilt map, BoW retrieval, SuperPoint, LightGlue, and PnP with optional gravity prior. This repository also includes a **test client** (`visual_pose_client.py`) for smoke tests and simple load experiments.
 
 ---
 
 ## Prerequisites
 
-1. **Map directory** (`--model_path`): must contain the localization database and assets (see [Map and database preparation](#map-and-database-preparation) and [Bag-of-words retrieval](#bag-of-words-bow-retrieval)).
-2. **Triton Inference Server** with the SuperPoint / SuperGlue models expected by this codebase (model names such as `superpoint_trt`; see `visual_pose_service/feature/superpoint.py`). The server connects to Triton at **`--sp_address`** (gRPC).
+1. **Map directory** (`--model_path`): must contain the localization database, database images, and BoW assets (see [Map and database preparation](#map-and-database-preparation) and [Bag-of-words retrieval](#bag-of-words-bow-retrieval)).
+2. **Triton Inference Server** with the EasyTensorRT SuperPoint / LightGlue models expected by this codebase. Defaults are `superpoint_onnx` and `lightglue_onnx`; TensorRT deployments usually use `superpoint_trt` and `lightglue_trt`. The server connects to Triton at **`--sp_address`** (gRPC).
 
 ---
 
@@ -17,7 +17,17 @@ gRPC service for visual localization: the server estimates camera pose using a p
 
 [**MapMindAI / EasyGaussianSplatting**](https://github.com/MapMindAI/EasyGaussianSplatting)
 
-That repository provides an end-to-end Gaussian Splatting workflow (e.g. drone / 360 data, Docker or local environment, scripts under `mindmap/`). After the pipeline finishes, you should have a **session / map folder** on disk that your team aligns with what `visual_localizer.py` expects (see `DATABASE_NAME = 'database_3d.db'` and related loading logic in `visual_pose_service/visual_localizer.py`).
+That repository provides an end-to-end Gaussian Splatting workflow (e.g. drone / 360 data, Docker or local environment, scripts under `mindmap/`). After the pipeline finishes, you should have a **session / map folder** on disk that your team aligns with what `visual_localizer.py` expects. The current implementation reads:
+
+```text
+/path/to/map/
+  database_3d.db
+  images/
+  retrieval_vocab_kmeans.pkl
+  retrieval_ids.npy
+  retrieval_bow_vectors.npy
+  output/tsdf_mesh.ply        # only needed when LOG_FLAG=1 draws mesh projections
+```
 
 Any extra steps to fill poses, 3D points from depth, and keypoints into the database are part of **your mapping pipeline** (or tooling shipped with EasyGaussianSplatting); this service repo does not re-run full map building.
 
@@ -35,7 +45,7 @@ Example of reconstruction result:
 
 ## Bag-of-words (BoW) retrieval
 
-**BoW retrieval files are produced by the [EasyGaussianSplatting](https://github.com/MapMindAI/EasyGaussianSplatting) map pipeline** alongside `database_3d.db` and the rest of the map layout. After a successful run, the map root you pass to this service as `--model_path` should already contain what `BowRetireval` in `visual_localizer.py` expects—no separate BoW step is required in the usual workflow.
+**BoW retrieval files are produced by the [EasyGaussianSplatting](https://github.com/MapMindAI/EasyGaussianSplatting) map pipeline** alongside `database_3d.db` and the rest of the map layout. After a successful run, the map root you pass to this service as `--model_path` should contain `retrieval_vocab_kmeans.pkl`, `retrieval_ids.npy`, and `retrieval_bow_vectors.npy` — no separate BoW step is required in the usual workflow.
 
 If you need to **regenerate** retrieval data (e.g. after manual edits to the database, or when debugging), you can run:
 
@@ -54,7 +64,7 @@ python retrieval/make_retrieval_db.py --model_path /path/to/your/map
 Create and activate an environment, then install Python dependencies:
 
 ```bash
-conda create -n vlpose python=3.9 -y
+conda create -n vlpose python=3.10 -y
 conda activate vlpose
 cd visual_pose_service
 pip install -r requirements.txt
@@ -98,12 +108,13 @@ MODEL_PATH=/path/to/map TRITON_MODEL_DIR=/path/to/EasyTensorRT \
 
 # TensorRT + GPU (converts models on first launch)
 MODEL_PATH=/path/to/map TRITON_MODEL_DIR=/path/to/EasyTensorRT \
+SP_MODEL_NAME=superpoint_trt SG_MODEL_NAME=lightglue_trt \
   docker compose --profile trt up
 ```
 
 The `visual_pose_server` image is built automatically on first launch; subsequent runs reuse the cached image. To force a rebuild: `docker compose build visual_pose_server`.
 
-Optional overrides (pass as environment variables): `VPS_PORT` (default `40010`), `POOL_SIZE` (default `4`), `TOP_K` (default `3`), `MAX_WORKERS` (default `10`), `LOG_LEVEL` (default `INFO`), `LOG_FLAG` (default `0`), `LOGS_DIR` (default `./logs`).
+Optional overrides (pass as environment variables): `VPS_PORT` (host port, default `40010`), `SP_ADDRESS` (default `tritonserver:8001` inside Compose), `POOL_SIZE` (default `4`), `TOP_K` (default `3`), `MAX_WORKERS` (default `10`), `LOG_LEVEL` (default `INFO`), `LOG_FLAG` (default `0`), `LOGS_DIR` (host log directory, default `./logs`), `SP_MODEL_NAME` (default `superpoint_onnx`), `SG_MODEL_NAME` (default `lightglue_onnx`).
 
 ---
 
@@ -120,7 +131,7 @@ SP_ADDRESS=YOUR_TRITON_HOST:8001 \
 ./scripts/run_vlserver.sh
 ```
 
-Defaults: `PORT=40010`, `SP_ADDRESS=127.0.0.1:8001`, `POOL_SIZE=4`, `TOP_K=3`. See comment header in `scripts/run_vlserver.sh` for all environment variables.
+Defaults: `PORT=40010`, `SP_ADDRESS=127.0.0.1:8001`, `POOL_SIZE=4`, `TOP_K=3`, `SP_MODEL_NAME=superpoint_onnx`, `SG_MODEL_NAME=lightglue_onnx`. See comment header in `scripts/run_vlserver.sh` for all environment variables.
 
 You can also pass arguments directly to the server (same as `visual_pose_server.py`):
 
@@ -140,7 +151,9 @@ python visual_pose_server.py \
   --port 40010 \
   --sp_address YOUR_TRITON_HOST:8001 \
   --pool_size 4 \
-  --top_k 3
+  --top_k 3 \
+  --sp_model_name superpoint_onnx \
+  --sg_model_name lightglue_onnx
 ```
 
 The server listens on **`0.0.0.0:<port>`**.
@@ -151,7 +164,7 @@ The server listens on **`0.0.0.0:<port>`**.
 
 | Argument | Description |
 |----------|-------------|
-| `--model_path` | Map root directory (must contain `database_3d.db` and related assets used by `VisualLocalizer`) |
+| `--model_path` | Map root directory (must contain `database_3d.db`, `images/`, and retrieval files used by `VisualLocalizer`) |
 | `--port` | gRPC listen port for this service (default `40010`) |
 | `--max_workers` | gRPC thread pool size (default `10`) |
 | `--log_level` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
@@ -160,16 +173,20 @@ The server listens on **`0.0.0.0:<port>`**.
 | `--log_flag` | `0` — console logging only; `1` — also write debug logs / match images under `--logs_dir` |
 | `--logs_dir` | Directory used when `--log_flag` is `1` |
 | `--pool_size` | Number of worker processes; each loads one `VisualLocalizer` (default `4`) |
+| `--sp_model_name` | Triton model name for SuperPoint (default `superpoint_onnx`) |
+| `--sg_model_name` | Triton model name for LightGlue / SuperGlue wrapper (default `lightglue_onnx`) |
 
 ---
 
 ## Call the server with the test client
 
-The bundled client is **not** a production SDK; paths and intrinsics are **hard-coded**.
+The bundled client is **not** a production SDK; server addresses, image paths, and intrinsics are **hard-coded** in `visual_pose_service/visual_pose_client.py`.
 
-1. Set **`SINGLE_CLIENT_ADDRESS`** / **`MULTI_CLIENTS_ADDRESS`** in `visual_pose_service/visual_pose_client.py` to your server `host:port`.
-2. Set **`self.folder`** / **`self.image_path`** to a real image file.
-3. Run:
+1. Set **`SINGLE_CLIENT_ADDRESS`** / **`MULTI_CLIENTS_ADDRESS`** to your server `host:port`.
+2. Set **`self.folder`** / **`self.image_path`** for single-client mode. The current default is `../Data/NS_hks_260414_1/test_img/1.jpg`.
+3. For multi-client mode, also update the hard-coded `image_path` inside `run_multi_clients()`.
+4. Adjust the sample intrinsics if needed. The client currently sends `fx=1302`, `fy=1302`, `cx=width/2`, `cy=height/2`, and four zero distortion coefficients.
+5. Run:
 
 ```bash
 conda activate vlpose
@@ -177,6 +194,13 @@ cd visual_pose_service
 export PYTHONPATH="$(pwd)"
 python visual_pose_client.py
 ```
+
+The script prompts for request interval and mode:
+
+- `1`: single client, repeatedly sends one image through `run_continuous()`.
+- `2`: multi clients, starts a thread pool and repeatedly sends the multi-client test image.
+
+Successful responses include `status=1`, `pose`, 3x3 rotation / translation covariance matrices encoded as `float64`, the original request timestamp, and `server_log`.
 
 Projection results:
 
@@ -194,6 +218,20 @@ The left side of the image shows the mesh projection result and map point reproj
 ## Production clients
 
 Use **gRPC** and **`GetPoseFromImage`**. Python stubs live under `visual_pose_service/proto/`. Original `.proto` files are not in this repository.
+
+Request payload:
+
+- `image_timestamp`: microsecond timestamp.
+- `image.image.encoded_str`: encoded image bytes that OpenCV can decode.
+- `intrinsics`: `fx`, `fy`, `cx`, `cy`, and optional four-value distortion coefficients.
+- `localization_prior` (optional): prior pose, gravity vector, and VIO pose. The current localizer can use gravity for PnP; pose-prior retrieval is disabled by default in `visual_localizer.py`.
+
+Response payload:
+
+- `status=1` on success; failed responses carry `server_log` and leave `status` at the proto default.
+- `pose`: translation plus quaternion rotation (`w`, `x`, `y`, `z`).
+- `translation_covariance` / `rotation_covariance`: 3x3 `float64` matrices serialized in `Matrix.data`.
+- `timestamp`: the request timestamp echoed back by the server.
 
 ---
 
